@@ -1,4 +1,4 @@
-# Salma Mohammed, 2020
+# Salma Mohammed, 2020 (Updated)
 
 #### PROBLEM AT HAND ####
 # The problem we are trying to solve is coming up with the best classification predictive model that can help us 
