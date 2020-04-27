@@ -1,50 +1,69 @@
+# Salma Mohammed, 2020
+
+#### PROBLEM AT HAND ####
+# The problem we are trying to solve is coming up with the best classification predictive model that can help us 
+# predict the outcome (answers call vs. doesnt answer) of this bank's tele-marketing phone calls.
+
+#### IMPORTING LIBRARIES AND DATASET ####
 remove(list = ls())
 library(tidyverse)
 library(dplyr)
-library(sandwich)
 library(knitr)
-library(lmtest)
 library(car)
 library(data.table)
-library(glmnet)
 library(pastecs)
 library(caret)
-library(pls)
-library(standardize)
 library(psych)
 library(corrplot)
 library(rpart)
 library(rpart.plot)
-library(caTools)
-library(RColorBrewer)
 library(rattle)
+library(ggplot2)
+library(ROSE)
+library(pROC)
+library(class)
+library(randomForest)
 
 
-############## BASIC EXPLORATORY ANALYSIS#####
-### Q1)#####
+
+# Importing data set
+dta_bank<- as.data.table(read.csv(file="Bank Case.csv"))
+  
+#### EXAMINING THE DATA ####
 
 
-dta_bank<- read.csv(file="/Users/salmamohammed/Downloads/Bank Case.csv")
-class(dta_bank)
-dta_bank<-as.data.table(dta_bank)
 
-
-### Q2)##### 
-
-# 2a) Units: age is years, and duration is also years.
+# Examining Data Types
+glimpse(dta_bank)
 list<-colnames(dta_bank)
 sapply(dta_bank, class)
 
-#2) b) 
 describe(dta_bank)
+
+  
+
+#### DATA PREPERATION I ####
+ 
+
+# Examining Data Types
+glimpse(dta_bank)
+list<-colnames(dta_bank)
+sapply(dta_bank, class)
+
+# Removing outliers
 if (max(dta_bank$age)>(mean(dta_bank$age)+4*(sd(dta_bank$age)))){print("has an outlier")}
 if (max(dta_bank$duration)>(mean(dta_bank$duration)+4*(sd(dta_bank$duration)))){print("has an outlier")}
 if (min(dta_bank$age)<(mean(dta_bank$age)-4*(sd(dta_bank$age)))){print("has an outlier")}
 if (min(dta_bank$duration)<(mean(dta_bank$duration)-4*(sd(dta_bank$duration)))){print("has an outlier")}
 
-### Q3)#####
+
+  
 
 
+#### DATA PREPERATION II ####
+
+ 
+# Creating Dummies
 dta_bank<- dta_bank %>% mutate(y=ifelse(y=='yes', 1,0))
 dta_bank_d <- fastDummies::dummy_cols(dta_bank, remove_first_dummy = TRUE)
 dta_bank_d <- dta_bank_d %>% mutate(job=NULL,
@@ -59,496 +78,273 @@ dta_bank_d <- dta_bank_d %>% mutate(job=NULL,
 )
 
 
-corrs<-cor(dta_bank_d)
-corrplots<-corrplot(corrs)
-### Q4)##### 
+colnames(dta_bank_d)
 
-#a) y= 0.028+ 0.000798jobblue-collar -.02669jobentrepreneur -.004315jobhousemaid...+
-#        .007maritalmarried+ .02247maritalsingle +...+ .005educationbasic.6y+ ...-.0388defaultunknown +
-#       .0009568housingunknown+... -.0039loanyes -.08contacttelephone+... + .2327monthdec+ -.01007day_of_weekmon      
-#
-#   b) i. Best time to perform telemarketing tasks is Wednesday in March
-#      ii. Retired Groups are more likely to respond.
-#      iii. Health could be a source of omitted variable bias. I wonder if people with 
-#           health issues would be more likely to engage with the bank due to financial pressures.
+# Summary statistics and missingness
+describe(dta_bank_d)
+unique(is.na(dta_bank_d)) # no missingness
 
-lm1<-lm(y~., data=dta_bank)
-summary(lm1)
+# Correlation 
+corrs<-round(cor(dta_bank_d),2)  
+corrs
+dta_bank_d$duration <-NULL
+#the table shows intermediate correlation between y and duration which makes sense since there would only be a duration for the call if the call was picked up in the first place, hence, we can drop that variable from our data set. 
+# There was high correlation between married vs single, as well as age & retirement, so we will need to examine that more through looking at the VIF of those two variables once we run our initial regression. Finally, there was some correlation between educational and job variables. 
 
 
 
+# Examining the balance of our data: the distribution of categorical outcome variable (y) 
+ggplot(dta_bank_d, aes(x=factor(y, levels=c(1, 0)))) + 
+  geom_bar(stat = 'count', fill='steelblue2', width = 0.6) + 
+  labs(title = '', 
+       x     = 'Answered Call',
+       y     = 'Count') +
+  scale_x_discrete(drop=FALSE, labels = c('Yes','No')) + theme_minimal()
+
+# our data is very imbalanced, so we will need to upsample our under-represented group (Answered-calls)
 
 
-############## PREDICTOVE MODELING AND TUNING ####
+# Adjusting our data imbalance using SMOTE
+print(prop.table(table(dta_bank_d$y)))
+colnames(dta_bank_d)
 
-### Q1)####
-# We split it to 80% training, 10% testing, and 10% validating. 
-# We do that so that we can train our model on a set of data, then we get to 
-# test our model on another set of data (validating data). And we repeat the process
-# Once we find a good model, we can finally use it for a final test to predict
-# the values of a test data set (test data). The reason we take all these precausions 
-# is so that our model doesn't start predicting the error term and gets too tailored to our 
-# one data set. The model should help us predict other data, that it has not been trained on. 
-# if it fails to do that, then it is a useless model.
-
-### Q2)####
-# Yes, call duration since it happens after the call (it's an outcome) 
-# rather than a background information that we can use to predict the 
-# outcome of the call. This is also indicated as part of the description of the data.
-
-### Q3)#### 
-# Overfitting is when our validating model has more accuracy than our test model.
-# According to google: it is a condition where a statistical model begins to 
-# describe the random error in the data rather than the relationships between variables.
-# Underfitting is the opposite and is not much of a problem.
-
-### Q4)#### 
-# This just means that some models work better with certain datasets.
-# In other words: some algorithms will fit certain data sets better than others. 
-# It also (by definition) means that there will be as many data sets that a given 
-# algorithm will not be able to model effectively. How effective a model will be is 
-# directly dependent on how well the assumptions made by the model fit the true nature of the data. (source: www.kdnuggets.com)
-
-## Prepping the data: 
-
-# Drop duration:
-dta_bank <- dta_bank %>% mutate(duration=NULL)
-dta_bank_d <- dta_bank_d %>% mutate(duration=NULL)
+# Renaming some variables
+names(dta_bank_d)[names(dta_bank_d)=="job_blue-collar"] <- "job_blue_collar"
+names(dta_bank_d)[names(dta_bank_d)=="job_self-employed"] <- "job_self_employed"
 
 
-# Split the data:
+# Spliting the data
 set.seed(1890)
-inx_train    = caret::createDataPartition(dta_bank$y, p=0.8)$Resample1 
-dta_train    = dta_bank[ inx_train, ]
-dta_left     = dta_bank[-inx_train, ]
-inx_test     = caret::createDataPartition(dta_left$y, p=0.5)$Resample1
-dta_test     = dta_left[ inx_test, ]
-dta_valid    = dta_left[ -inx_test, ]
-
-unique(dta_bank_d$y)
-unique(dta_bank$y)
-
-
-### Q5)####
-# a) They one that overfits the most is LM4.
-# b) None of them underfits. The one that overfits the least is LM2.
-# c) Not necessarily. If the model fits the training data the best, but underperforms
-# in predicting the test data then that is an issue.
-# d) Yes, a confusion matrix can help us calculate the accuracy of our model for both the training and test datasets.
-# e) To run these regressions, we will first train the model on the training data, then we can validate our model
-# by using it to predict the validating data. We can repeat this process until we feel happy with our model. Finally, we 
-# should test our model on the test data by predicting its y. 
-# LM1####
-# Model structure: y=0.2 - 0.000018age - 0.1month(aug)+ 0.2month(dec)...
-lm1<-lm(y~ age + factor(month), data= dta_train)
-summary(lm1) # AR2 0.07459 
-pr_lm1.v<- predict(lm1, newdata=dta_valid)
-pr_lm1.v <- as.data.table(pr_lm1.v)
-pr_lm1.v<- pr_lm1.v %>% mutate(pr_lm1.v = ifelse(pr_lm1.v>=.5, 1,0))
-
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_valid$y),
-                                         pred_data = as.numeric(pr_lm1.v$pr_lm1.v))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Valid Data Model Accuracy is 0.8960661
-
-
-pr_lm1.t<- predict(lm1, newdata=dta_test)
-pr_lm1.t <- as.data.table(pr_lm1.t)
-pr_lm1.t<- pr_lm1.t %>% mutate(pr_lm1.t = ifelse(pr_lm1.t>=.5, 1,0))
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_test$y),
-                                         pred_data = as.numeric(pr_lm1.t$pr_lm1.t))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Test Data Model Accuracy is 0.8917213
-
-
-
-# LM2####
-# Model Structure: y= 0.8073- 0.03.3age + .000505age_sqrd+ ...+ 0.27month(sep)
-dta_train_lm2 <- dta_train
-dta_train_lm2 <- dta_train_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_valid_lm2 <- dta_valid
-dta_valid_lm2 <- dta_valid_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_test_lm2 <- dta_test
-dta_test_lm2 <- dta_test_lm2 %>% mutate(age_sqrd=age*age,
-                                        age_cube=age*age*age)
-  
-lm2<-lm(y~age+age_sqrd+age_cube+factor(month),data= dta_train_lm2)
-summary(lm2) # AR2 0.08796
-pr_lm2.v<- predict(lm2, newdata=dta_valid_lm2)
-pr_lm2.v <- as.data.table(pr_lm2.v)
-pr_lm2.v<- pr_lm2.v %>% mutate(pr_lm2.v = ifelse(pr_lm2.v>=.5, 1,0))
-
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_valid_lm2$y),
-                                         pred_data = as.numeric(pr_lm2.v$pr_lm2.v))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Valid Data Model Accuracy is 0.8933949
-
-
-pr_lm2.t<- predict(lm2, newdata=dta_test_lm2)
-pr_lm2.t <- as.data.table(pr_lm2.t)
-pr_lm2.t<- pr_lm2.t %>% mutate(pr_lm2.t = ifelse(pr_lm2.t>=.5, 1,0))
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_test_lm2$y),
-                                         pred_data = as.numeric(pr_lm2.t$pr_lm2.t))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Test Data Model Accuracy is 0.890993
-
-
-# LM3#### 
-# Model Structure:   y= 0.028+ 0.000798jobblue-collar -.02669jobentrepreneur -.004315jobhousemaid...+
-#                       .007maritalmarried+ .02247maritalsingle +...+ .005educationbasic.6y+ ...-.0388defaultunknown +
-#                       .0009568housingunknown+... -.0039loanyes -.08contacttelephone+... + .2327monthdec+ -.01007day_of_weekmon 
-lm3 = lm(y~., data= dta_train)
-summary(lm3) # AR2 0.1021 
-pr_lm3.v<- predict(lm3, newdata=dta_valid)
-pr_lm3.v <- as.data.table(pr_lm3.v)
-pr_lm3.v<- pr_lm3.v %>% mutate(pr_lm3.v = ifelse(pr_lm3.v>=.5, 1,0))
-
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_valid$y),
-                                         pred_data = as.numeric(pr_lm3.v$pr_lm3.v))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Valid Data Model Accuracy is 0.8984944
-
-
-pr_lm3.t<- predict(lm3, newdata=dta_test)
-pr_lm3.t <- as.data.table(pr_lm3.t)
-pr_lm3.t<- pr_lm3.t %>% mutate(pr_lm3.t = ifelse(pr_lm3.t>=.5, 1,0))
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_test$y),
-                                         pred_data = as.numeric(pr_lm3.t$pr_lm3.t))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Test Data Model Accuracy is 0.8922068
-
-
-# LM4####
-
-
-lm4 = lm(y~.^2, data= dta_train)
-summary(lm4) # AR2 0.1469  
-pr_lm4.v<- predict(lm4, newdata=dta_valid)
-pr_lm4.v <- as.data.table(pr_lm4.v)
-pr_lm4.v<- pr_lm4.v %>% mutate(pr_lm4.v = ifelse(pr_lm4.v>=.5, 1,0))
-
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_valid$y),
-                                         pred_data = as.numeric(pr_lm4.v$pr_lm4.v))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Valid Data Model Accuracy is 0.8950947
-
-
-pr_lm4.t<- predict(lm4, newdata=dta_test)
-pr_lm4.t <- as.data.table(pr_lm4.t)
-pr_lm4.t<- pr_lm4.t %>% mutate(pr_lm4.t = ifelse(pr_lm4.t>=.5, 1,0))
-
-fitted_data          = data.table( cbind(real_data = as.numeric(dta_test$y),
-                                         pred_data = as.numeric(pr_lm4.t$pr_lm4.t))
-)
-
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-dim(fitted_data)
-confuss_mat_prog
-accuracy<-correct/all
-accuracy
-#Test Data Model Accuracy is 0.8885652
-
-############## IMPROVING THE PREDICTIVE POWER#### 
-### Q1)####
-
-# Changing the y back to a scale between 0 to 1 (instead of a categorical)
-pr_lm2.v<- predict(lm2, newdata=dta_valid_lm2)
-pr_lm2.v <- as.data.table(pr_lm2.v)
-summary(pr_lm2.v)
-
-pairs(~ y + age + age_sqrd +age_cube + month, 
-      data = dta_valid_lm2, row1attop=FALSE)
-
-# there is no apparent linear relationship between y and the other 
-# variables (age, age^2 and age^3 have a linear relationship between them as expected). 
-### Q2)####
-# NAIVE BAYES MODEL####
-
-set.seed(1890)
-unique(dta_bank$y)
-inx_train    = caret::createDataPartition(dta_bank$y, p=0.8)$Resample1 
-dta_train    = dta_bank[ inx_train, ]
-dta_left     = dta_bank[-inx_train, ]
-inx_test     = caret::createDataPartition(dta_left$y, p=0.5)$Resample1
-dta_test     = dta_left[ inx_test, ]
-dta_valid    = dta_left[ -inx_test, ]
-dta_train$y<-as.factor(dta_train$y)
-
-dta_train_lm2 <- dta_train
-dta_train_lm2 <- dta_train_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_valid_lm2 <- dta_valid
-dta_valid_lm2 <- dta_valid_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_test_lm2 <- dta_test
-dta_test_lm2 <- dta_test_lm2 %>% mutate(age_sqrd=age*age,
-                                        age_cube=age*age*age)
-
-NBclassifier= naivebayes::naive_bayes(formula= y~age+ age_sqrd+age_cube+factor(month),
-                                     usekernel = T,
-                                     data      = dta_train_lm2)
-predict(NBclassifier,newdata = dta_train_lm2)
-
-fitted_data$real_data
-
-# Evaluating model performance using a confusion matrix            
-fitted_data          = data.table( cbind(real_data = dta_valid_lm2$y,
-                                         pred_data = paste(predict(NBclassifier,newdata = dta_valid_lm2)))
-)
-
-class(fitted_data$real_data)
-class(fitted_data$pred_data)
-fitted_data<-as.data.table(fitted_data)
-fitted_data$is_equal = fitted_data$real_data==fitted_data$pred_data
-confuss_mat_prog          = fitted_data[,
-                                        {
-                                          tmp1=sum(is_equal);
-                                          tmp2=sum(!is_equal);
-                                          list(corrects=tmp1,wrongs = tmp2)
-                                        },keyby=.(real_data,pred_data)]
-all<-    sum(confuss_mat_prog[,3:4])
-correct<-sum(confuss_mat_prog[,3])
-confuss_mat_prog
-
-
-accuracy<-correct/all
-
-accuracy
-
-# Accuracy for the NB model is  0.8926663. 
-# The model doesn't give us a better accuracy than the linear model.
-
-
-# KNN MODEL####
-
-#factoring age & y
-#dta_train_kn<- dta_train
-#dta_train_kn$y <- as.factor((dta_train_kn$y))
-
-
-dta_bank <- dta_bank %>% mutate(duration=NULL)
-dta_bank_d <- dta_bank_d %>% mutate(duration=NULL)
-set.seed(1890)
-inx_train    = caret::createDataPartition(dta_bank_d$y, p=0.8)$Resample1 
+inx_train    = createDataPartition(dta_bank_d$y, p=0.8)$Resample1 
 dta_train    = dta_bank_d[ inx_train, ]
 dta_left     = dta_bank_d[-inx_train, ]
-inx_test     = caret::createDataPartition(dta_left$y, p=0.5)$Resample1
+inx_test     = createDataPartition(dta_left$y, p=0.5)$Resample1
 dta_test     = dta_left[ inx_test, ]
 dta_valid    = dta_left[ -inx_test, ]
 
-
-dta_train_lm2 <- dta_train
-dta_train_lm2 <- dta_train_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_valid_lm2 <- dta_valid
-dta_valid_lm2 <- dta_valid_lm2 %>% mutate(age_sqrd=age*age,
-                                          age_cube=age*age*age)
-
-dta_test_lm2 <- dta_test
-dta_test_lm2 <- dta_test_lm2 %>% mutate(age_sqrd=age*age,
-                                        age_cube=age*age*age)
+# Checking the distribution of outcome variable in training and test data. They are both distributed similarly.
+print(prop.table(table(dta_train$y)))
+print(prop.table(table(dta_test$y)))
 
 
-dim(dta_train_lm2)
-dim(dta_test_lm2)
+# Generating synthetic data for our training sample
+dta_train = ROSE(y ~ ., data = dta_train, seed = 1)$data
 
 
+# Checking the distribution of new dataset
+print(prop.table(table(dta_train$y))) # We now have a balanced distribution for our training data
+ggplot(dta_train, aes(x=factor(y, levels=c(1, 0)))) + 
+  geom_bar(stat = 'count', fill='steelblue2', width = 0.6) + 
+  labs(title = '', 
+       x     = 'Answered Call',
+       y     = 'Count') +
+  scale_x_discrete(drop=FALSE, labels = c('Yes','No')) + theme_minimal()
+  
 
-# Normalizing function and normalizing age                                                
+
+#### LOGISTIC REGRESSION & searching for large variance inflation factors (VIF) ####
+ 
+summary(dta_train)
+train_logit<- glm(y ~ ., data = dta_train, family = "binomial"(link = "logit"))
+summary(train_logit)
+
+# Checking VIF
+alias( lm( y ~ . , data=dta_train) )
+dta_train$housing_unknown <- NULL
+round(vif(train_logit),1)
+# The variable with the highest VIF is  education_university.degree but it remains within an acceptable range (below 5) so we will keep the variable in the model. 
+
+
+# Running a regression with only variables with statistic significance (p<0.05)
+train_logit2<-glm(as.formula(paste(colnames(dta_train)[2], "~",
+                                   paste(colnames(dta_train)[-c(5:6, 13, 14, 16, 17, 19:21, 23, 25:28 )], collapse = "+"), sep = "")),
+                  data=dta_train, family = "binomial"(link = "logit"))
+summary(train_logit2)
+
+
+# Using our model to predict on our validation data
+logit_pred_2 <- predict(train_logit2, dta_valid, type = "response")
+vif(train_logit2)
+
+# Checking first 5 actual and predicted records
+data.frame(actual = dta_valid$y[1:5], predicted = logit_pred_2[1:5]) # outcome is looking great so far! all were predicted correctly
+
+
+# Confusion Matrix 
+logit_pred_2 <-round(logit_pred_2,5)
+logit_pred_2 <- as.factor(ifelse(logit_pred_2 > 0.5, 1, 0))
+confusionMatrix(logit_pred_2 , as.factor(dta_valid$y)) #Accuracy : 0.6804, Sensitivity : 0.6808, Specificity : 0.6776
+
+
+plot(roc(logit_pred_2, dta_valid$y, direction="<"),
+     col="Blue", lwd=3, main="ROC")
+
+# Conductin Outlier Analysis - The Normal Q-Q plot looks very off which is problematic. We should explore other models to see if they perform significantly better than the logistic model, or come back to this section and expirement with removing certain observations that would help with fixing the Normal Q-Q graph. 
+hist(train_logit2$residuals)
+par(mfrow=c(2,2))
+plot(train_logit2)
+
+
+  
+
+#### K NEAREST NEIGHBOR ####
+ 
+
+# Partitioning the data:
+set.seed(1890)
+inx_train    = createDataPartition(dta_bank_d$y, p=0.8)$Resample1 
+dta_train    = dta_bank_d[ inx_train, ]
+dta_left     = dta_bank_d[-inx_train, ]
+inx_test     = createDataPartition(dta_left$y, p=0.5)$Resample1
+dta_test     = dta_left[ inx_test, ]
+dta_valid    = dta_left[ -inx_test, ]
+
+# Normalizing the data (the age variable since it's the only continuous one)
 normalize = function(x){return ((x - min(x)) / (max(x) - min(x)))}
-normalize(c(1, 2, 3, 4, 5))
-normalize(c(10, 20, 30, 40, 50))
-dta_train_lm2$age = normalize(dta_train_lm2$age)
-dta_train_lm2$age = normalize(dta_train_lm2$age_sqrd)
-dta_train_lm2$age = normalize(dta_train_lm2$age_cube)
 
-dta_valid_lm2$age = normalize(dta_valid_lm2$age)
-dta_valid_lm2$age = normalize(dta_valid_lm2$age_sqrd)
-dta_valid_lm2$age = normalize(dta_valid_lm2$age_cube)
+dta_train_knn <- dta_train
+dta_test_knn  <- dta_test
+dta_valid_knn <- dta_valid
 
-dta_test_lm2$age = normalize(dta_test_lm2$age)
-dta_test_lm2$age = normalize(dta_test_lm2$age_sqrd)
-dta_test_lm2$age = normalize(dta_test_lm2$age_cube)
-summary(dta_train_lm2$age)
+dta_train_knn[,1] <- normalize(dta_train[,1])
+dta_test_knn[,1]  <- normalize(dta_test[,1])
+dta_valid_knn[,1] <- normalize(dta_valid[,1])
 
-# Training model on dta_training 
-require("class")
-knn_model <-  knn(dta_train_lm2, dta_test_lm2, dta_train_lm2$y, k=3)
+# Removing our outcome variable
+dta_train_knn_X = dta_train_knn[,-2]
+dta_test_knn_X  = dta_test_knn[,-2]
+dta_valid_knn_X = dta_valid_knn[,-2]
 
-dim(dta_test)
-# Evaluating performance on dta_test  
-k1_conf_mat  =   gmodels::CrossTable(x          = dta_test_lm2$y, 
-                                     y          = knn_model,
-                                     prop.chisq = TRUE)
+# Creating a data frame with two columns: k, and accuracy
+accuracy.df <- data.frame(k = seq(1, 12, 1), accuracy = rep(0, 12))
 
-# Confusion matrix
-k1_conf_mat$t
-accuracy <- (3655+164)/(4119)
-accuracy
+# Using our model to predict on our validating data and computing knn for different k on validation to find the optimal k value
+set.seed(1890)
+for(i in 2:12) {          
+  knn.pred <- knn(dta_train_knn_X, dta_valid_knn_X, dta_train_knn$y, k = i)
+  accuracy.df[i, 2] <- confusionMatrix(knn.pred, as.factor(dta_valid_knn$y))$overall[1] 
+}
 
-# ACCURACY OF KNN MODEL IS 0.9271668!!! 
-
-### Q3)####
-# 3) NB makes the accuracy worse, whereas KNN gives us the best accuracy!!
-############### CAUSAL QUESTIONS ####
-### Q1)####
-# 1) When we study causality we always focus on the parameters multiplying the X variables
-#instead of the predictive capacity of the model. We then give a causal interpretation to
-#the estimated coefficients.
-#a. Explain when in marketing is preferable a causal analysis to a predictive analysis.
-#ANS: A causal analysis is preferable to predictive analysis when we are trying to understand what causes 
-# a certain reaction from our customers.
-#b. In the context of a linear regression, explain the concepts of a biased estimated.
-#Ans: A biased estimate is when our our actual Betas are far from our estimated Betas in one direction vs. the other (instead of just having a larger variance). 
-# According to Wikipidea, bias is related to consistency in that consistent estimators are convergent and asymptotically unbiased (hence converge to the correct 
-# value as the number of data points grows arbitrarily large).
-
-### Q2)####
-# 2 . Which of the variables could be interesting to analyze from a causal point of view. Give
-#examples. 
-# ANS: It would be interesting to see if marriage (or perhaps even having kids) causes people to engage with the bank.
+accuracy.df # K=9 is our optimal value for K as it acheives the highest level of accuracy
 
 
 
-### Q3)####
 
-# 3. For those variables what would be the potential omitted variables problem?
-# ANS: Marriage is related to soci-economic status to some extent (most of married people are ones who can afford it), 
-# it can also be tied to religion (if interacted with age) and religion can impact people's banking habits,
-# so this could be causing omitted variable bias.
-# The same applies to number of kids. Rich people tend to have fewer kids, 
-# where as larger families tend to be poor. This could be correlated with the error term.
+  
 
 
+#### DECISION TREE MODEL ####
+ 
 
+# Creating an unpruned tree
+tree_model_unpruned <- rpart(y ~ ., data = dta_train)
+fancyRpartPlot(tree_model_unpruned, type=2, caption="", palettes=c("PuBu", "OrRd"), tweak=1) 
+
+# Using our model to predict on our validating data
+valid_pred_tree = predict(tree_model_unpruned, newdata = dta_valid)
+valid_pred_tree <-round(valid_pred_tree, 5)
+valid_pred_tree <- as.factor(ifelse(valid_pred_tree > 0.5, 1, 0))
+
+confusionMatrix(valid_pred_tree, as.factor(dta_valid$y)) #Accuracy:0.8975, Sensitivity:0.9889 ,Specificity: 0.1098
+
+
+# Pruning our decision tree
+train_for_cv = rbind(dta_train, dta_valid)
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+set.seed(123)
+tree_model_pruned <- train(factor(y) ~., 
+                           data = train_for_cv, 
+                           method = "rpart",
+                           trControl=trctrl,
+                           tuneLength = 15)
+
+plot(tree_model_pruned) 
+tree_model_pruned # best complexity parameter: 0.0009537434  Accuracy = 0.8879029 which is lower than our unpruned tree so we can leave our tree unpruned. 
+
+
+  
+
+
+#### RANDOM FOREST ####
+ 
+
+# Runing a random forest model
+set.seed(123)
+rf_model = randomForest(as.factor(y) ~ ., 
+                        data = dta_train, 
+                        ntree = 500, 
+                        mtry = 3, 
+                        importance = TRUE)  
+
+# Using our model to predict on our validating data
+rf_pred = predict(rf_model, dta_valid)
+confusionMatrix(rf_pred, as.factor(dta_valid$y)) #Accuracy: 0.8968, Sensitivity: 0.99919, Specificity : 0.01402
+
+# Variable importance plot 
+varImpPlot(rf_model, type = 1)
+# It seems that age has a large impact as a variable on the outcome variable (y) followed by what month the person was contacted, and whether they were contacted by telephone.
+
+# Optimizing and tuning our model
+trctrl <- trainControl(method="repeatedcv", number=10, repeats = 3)
+
+rf_model_cv <- train(
+  as.factor(y) ~ .,
+  tuneLength = 3,
+  data = train_for_cv, 
+  method = 'ranger',
+  trControl = trctrl
+)
+
+rf_model_cv$finalModel
+rf_model_cv$bestTune
+# our best model uses 2 variables at each split and and the minimum size of nodes is 1
+
+  
+
+#### TESTING MODELS #####
+
+
+# LOGISTIC:  <- this will probably perform the worst based on the residual analysis we ran
+logit_pred_test <- predict(train_logit2, dta_test, type = "response")
+
+# LOGISTIC: Confusion Matrix 
+logit_pred_test <-round(logit_pred_test,5)
+logit_pred_test <- as.factor(ifelse(logit_pred_test > 0.5, 1, 0))
+print(confusionMatrix(logit_pred_test , as.factor(dta_test$y))$overall[1]) # Accuracy: 0.6836611 
+
+
+
+# KNN: 
+knn.pred.test <-  knn(dta_train_knn_X, dta_test_knn_X, dta_train_knn$y, k=9)
+
+# KNN: Confusion Matrix
+print(confusionMatrix(knn.pred.test, as.factor(dta_test_knn$y))$overall[1]) # Accuracy: 0.8839524 
+
+
+
+# DECISION TREE:  <- our unpruned tree performed better than the pruned one so we will be using this model
+test_pred_tree = predict(tree_model_unpruned, newdata = dta_test)
+test_pred_tree <-round(test_pred_tree, 5)
+test_pred_tree <- as.factor(ifelse(test_pred_tree > 0.5, 1, 0)) 
+
+# DECISION TREE: Confusion Matrix 
+print(confusionMatrix(test_pred_tree, as.factor(dta_test$y))$overall[1]) # Accuracy: 0.890993 
+
+
+# RANDOM FOREST: 
+rf_pred = predict(rf_model, dta_test)
+
+
+# RANDOM FOREST: Confusion Matrix:
+print(confusionMatrix(rf_pred, as.factor(dta_test$y))$overall[1]) #Accuracy: 0.8917213
+
+
+
+#### CONCLUSION ####
+#Based on Accuracy scores, the best predictive model to use is the Random Forest model (0.8917213). 
+#In this excercise we didn't focus on Sensitivity and Specifity since in the context of the probelm they are both important: We
+#wouldn't want to predict that a customer, who did in fact pick up our call, wasn't going to pick it up because that way we might 
+#lose out on an opportunity with that customer. Similarly, we wouldn't want to waste our resources reaching out to customers who we had #predicted were going to pick up our calls, but end up not doing so. So, for our purposes, we relied on Accuracy.
 
 
 
